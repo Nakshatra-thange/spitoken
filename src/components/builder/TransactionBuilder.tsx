@@ -1,18 +1,27 @@
 /**
- * TransactionBuilder.tsx
+ * TransactionBuilder.tsx  (Day 2 Afternoon — full rebuild)
  *
- * The main Day 2 panel.
- * Left sidebar: ordered list of instruction instances (add, reorder, remove).
- * Right panel:  the form for the currently focused instruction instance.
+ * Layout:
+ *   ┌─────────────────┬──────────────────────────┬───────────────────┐
+ *   │  Instruction    │  Focused instruction     │  Tx Summary       │
+ *   │  list           │  form (accounts + args)  │  (stats /         │
+ *   │  (drag-drop)    │                          │   conflicts /     │
+ *   │                 │                          │   suggestions)    │
+ *   └─────────────────┴──────────────────────────┴───────────────────┘
  *
- * "Add Instruction" opens a picker showing all instructions from the loaded IDL.
+ * Drag-and-drop is implemented with the native HTML5 drag API — no external
+ * library needed for a flat ordered list. We store the dragged ID in a ref
+ * and update positions on dragover + drop.
  */
 
-import React, { useState, useCallback } from "react"
+import React, { useState, useCallback, useRef, type DragEvent } from "react"
 import { useAppStore } from "../../store/appStore"
 import { useBuilderStore } from "../../store/builderStore"
 import { InstructionInstanceForm } from "./InstructionInstanceForm"
+import { TxSummaryPanel } from "./TxSummaryPanel"
+import { getResolvedAddress } from "../../lib/txValidator"
 import { type InstructionDefinition } from "../../types/idl"
+import { type InstructionInstance } from "../../types/builder"
 
 // ─── INSTRUCTION PICKER ───────────────────────────────────────────────────────
 
@@ -32,10 +41,18 @@ function InstructionPicker({
 
   return (
     <div className="ix-picker-overlay" onClick={onClose}>
-      <div className="ix-picker" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Add instruction">
+      <div
+        className="ix-picker"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Add instruction"
+        aria-modal="true"
+      >
         <div className="ix-picker__header">
           <span className="ix-picker__title">Add Instruction</span>
-          <button className="ix-picker__close" onClick={onClose} type="button" aria-label="Close">×</button>
+          <button className="ix-picker__close" onClick={onClose} type="button" aria-label="Close">
+            ×
+          </button>
         </div>
         <div className="ix-picker__search-wrap">
           <input
@@ -44,6 +61,7 @@ function InstructionPicker({
             placeholder="Search instructions…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            // eslint-disable-next-line jsx-a11y/no-autofocus
             autoFocus
             spellCheck={false}
           />
@@ -62,7 +80,7 @@ function InstructionPicker({
             >
               <span className="ix-picker__item-name">{def.name}</span>
               <span className="ix-picker__item-meta">
-                {def.accounts.length} accounts · {def.args.length} args
+                {def.accounts.length} acct · {def.args.length} arg
               </span>
             </button>
           ))}
@@ -72,212 +90,367 @@ function InstructionPicker({
   )
 }
 
-// ─── INSTANCE SIDEBAR ITEM ────────────────────────────────────────────────────
+// ─── INSTRUCTION LIST ITEM ────────────────────────────────────────────────────
+// Draggable. Shows execution number, name, readiness dot, and action buttons.
 
-function InstanceSidebarItem({
-  label,
+function InstructionListItem({
+  inst,
   index,
+  total,
   isFocused,
-  isFirst,
-  isLast,
-  accountCount,
-  argCount,
-  onClick,
+  isDragOver,
+  onFocus,
   onRemove,
-  onMoveUp,
-  onMoveDown,
   onDuplicate,
+  onDragStart,
+  onDragOver,
+  onDragEnd,
+  onDrop,
 }: {
-  label: string
+  inst: InstructionInstance
   index: number
+  total: number
   isFocused: boolean
-  isFirst: boolean
-  isLast: boolean
-  accountCount: number
-  argCount: number
-  onClick: () => void
+  isDragOver: boolean
+  onFocus: () => void
   onRemove: () => void
-  onMoveUp: () => void
-  onMoveDown: () => void
   onDuplicate: () => void
+  onDragStart: (e: DragEvent<HTMLDivElement>) => void
+  onDragOver: (e: DragEvent<HTMLDivElement>) => void
+  onDragEnd: () => void
+  onDrop: (e: DragEvent<HTMLDivElement>) => void
 }): React.ReactNode {
+  const resolved = inst.accounts.filter(
+    (a) => getResolvedAddress(a.resolution) !== null
+  ).length
+  const total_acct = inst.accounts.length
+  const allResolved = total_acct === 0 || resolved === total_acct
+  const hasErrors = inst.accounts.some((a) => a.resolution.kind === "error")
+
+  const statusColor = hasErrors
+    ? "red"
+    : allResolved
+    ? "green"
+    : "yellow"
+
   return (
-    <div className={`builder-sidebar-item ${isFocused ? "builder-sidebar-item--focused" : ""}`}>
-      <button className="builder-sidebar-item__main" onClick={onClick} type="button">
-        <span className="builder-sidebar-item__index">
-          #{String(index + 1).padStart(2, "0")}
-        </span>
-        <span className="builder-sidebar-item__name">{label}</span>
-        <span className="builder-sidebar-item__meta">
-          {accountCount}a · {argCount}b
+    <div
+      className={[
+        "ixlist-item",
+        isFocused ? "ixlist-item--focused" : "",
+        isDragOver ? "ixlist-item--dragover" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragEnd={onDragEnd}
+      onDrop={onDrop}
+      data-id={inst.id}
+    >
+      {/* Drag handle */}
+      <span className="ixlist-item__handle" aria-hidden="true" title="Drag to reorder">
+        ⠿
+      </span>
+
+      {/* Execution number */}
+      <span className="ixlist-item__num">{index + 1}</span>
+
+      {/* Arrow between items (visual order cue) */}
+      {index < total - 1 && (
+        <span className="ixlist-item__order-hint">→</span>
+      )}
+
+      {/* Main click area */}
+      <button className="ixlist-item__body" onClick={onFocus} type="button">
+        <span className="ixlist-item__name">{inst.definition.name}</span>
+        <span className="ixlist-item__meta">
+          {total_acct > 0 && (
+            <span className="ixlist-item__acct-count">
+              {resolved}/{total_acct} acct
+            </span>
+          )}
         </span>
       </button>
-      <div className="builder-sidebar-item__actions">
+
+      {/* Readiness dot */}
+      <span
+        className={`ixlist-item__dot ixlist-item__dot--${statusColor}`}
+        title={
+          hasErrors
+            ? "Has errors"
+            : allResolved
+            ? "All accounts resolved"
+            : `${total_acct - resolved} account(s) pending`
+        }
+      />
+
+      {/* Actions */}
+      <div className="ixlist-item__actions">
         <button
-          className="builder-item-action"
-          onClick={onMoveUp}
-          disabled={isFirst}
-          type="button"
-          title="Move up"
-          aria-label="Move instruction up"
-        >↑</button>
-        <button
-          className="builder-item-action"
-          onClick={onMoveDown}
-          disabled={isLast}
-          type="button"
-          title="Move down"
-          aria-label="Move instruction down"
-        >↓</button>
-        <button
-          className="builder-item-action"
+          className="ixlist-item__action"
           onClick={onDuplicate}
           type="button"
           title="Duplicate"
           aria-label="Duplicate instruction"
-        >⧉</button>
+        >
+          ⧉
+        </button>
         <button
-          className="builder-item-action builder-item-action--danger"
+          className="ixlist-item__action ixlist-item__action--danger"
           onClick={onRemove}
           type="button"
           title="Remove"
           aria-label="Remove instruction"
-        >×</button>
+        >
+          ×
+        </button>
       </div>
     </div>
   )
 }
 
-// ─── MAIN BUILDER ─────────────────────────────────────────────────────────────
+// ─── DRAGGABLE INSTRUCTION LIST ───────────────────────────────────────────────
 
-export function TransactionBuilder(): React.ReactNode {
-  const { schema } = useAppStore()
+function DraggableInstructionList(): React.ReactNode {
   const {
     instances,
     focusedId,
-    addInstruction,
-    removeInstruction,
-    moveInstruction,
-    duplicateInstruction,
     setFocused,
-    clearAll,
+    removeInstruction,
+    duplicateInstruction,
   } = useBuilderStore()
 
+  // We store drag state in refs to avoid re-renders on every dragover event.
+  const dragIdRef = useRef<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+
+  const handleDragStart = useCallback(
+    (e: DragEvent<HTMLDivElement>, id: string) => {
+      dragIdRef.current = id
+      e.dataTransfer.effectAllowed = "move"
+      // Required for Firefox
+      e.dataTransfer.setData("text/plain", id)
+    },
+    []
+  )
+
+  const handleDragOver = useCallback(
+    (e: DragEvent<HTMLDivElement>, id: string) => {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = "move"
+      if (id !== dragIdRef.current) setDragOverId(id)
+    },
+    []
+  )
+
+  const handleDrop = useCallback(
+    (e: DragEvent<HTMLDivElement>, targetId: string) => {
+      e.preventDefault()
+      const sourceId = dragIdRef.current
+      if (sourceId === null || sourceId === targetId) return
+
+      // Reorder in the store
+      useBuilderStore.setState((state) => {
+        const items = [...state.instances]
+        const srcIdx = items.findIndex((i) => i.id === sourceId)
+        const tgtIdx = items.findIndex((i) => i.id === targetId)
+        if (srcIdx < 0 || tgtIdx < 0) return state
+        const [moved] = items.splice(srcIdx, 1)
+        if (moved === undefined) return state
+        items.splice(tgtIdx, 0, moved)
+        return { instances: items }
+      })
+
+      setDragOverId(null)
+      dragIdRef.current = null
+    },
+    []
+  )
+
+  const handleDragEnd = useCallback(() => {
+    dragIdRef.current = null
+    setDragOverId(null)
+  }, [])
+
+  return (
+    <div className="ixlist" role="list" aria-label="Instructions">
+      {instances.map((inst, i) => (
+        <InstructionListItem
+          key={inst.id}
+          inst={inst}
+          index={i}
+          total={instances.length}
+          isFocused={focusedId === inst.id}
+          isDragOver={dragOverId === inst.id}
+          onFocus={() => setFocused(inst.id)}
+          onRemove={() => removeInstruction(inst.id)}
+          onDuplicate={() => duplicateInstruction(inst.id)}
+          onDragStart={(e) => handleDragStart(e, inst.id)}
+          onDragOver={(e) => handleDragOver(e, inst.id)}
+          onDragEnd={handleDragEnd}
+          onDrop={(e) => handleDrop(e, inst.id)}
+        />
+      ))}
+    </div>
+  )
+}
+
+// ─── LEFT PANEL ───────────────────────────────────────────────────────────────
+
+function InstructionListPanel({
+  onAddInstruction,
+  onClearAll,
+}: {
+  onAddInstruction: () => void
+  onClearAll: () => void
+}): React.ReactNode {
+  const { instances } = useBuilderStore()
+
+  return (
+    <div className="builder-left-panel">
+      <div className="builder-left-panel__header">
+        <div className="builder-left-panel__title-row">
+          <span className="builder-left-panel__title">Transaction</span>
+          <span className="builder-left-panel__subtitle">
+            {instances.length === 0
+              ? "No instructions"
+              : `${instances.length} instruction${instances.length !== 1 ? "s" : ""}`}
+          </span>
+        </div>
+        {instances.length > 0 && (
+          <button
+            className="builder-clear-btn"
+            onClick={onClearAll}
+            type="button"
+            title="Clear all instructions"
+          >
+            Clear all
+          </button>
+        )}
+      </div>
+
+      {/* Order explanation when multiple instructions exist */}
+      {instances.length > 1 && (
+        <div className="builder-order-hint">
+          <span className="builder-order-hint__icon">↕</span>
+          <span>Drag to reorder — Solana executes top→bottom</span>
+        </div>
+      )}
+
+      <div className="builder-left-panel__list">
+        {instances.length === 0 ? (
+          <div className="builder-list-empty">
+            <span className="builder-list-empty__icon">⬡</span>
+            <span>Add your first instruction</span>
+          </div>
+        ) : (
+          <DraggableInstructionList />
+        )}
+      </div>
+
+      <button className="builder-add-btn" onClick={onAddInstruction} type="button">
+        + Add Instruction
+      </button>
+    </div>
+  )
+}
+
+// ─── CENTER FORM PANEL ────────────────────────────────────────────────────────
+
+function FormPanel(): React.ReactNode {
+  const { instances, focusedId } = useBuilderStore()
+  const { schema } = useAppStore()
+  const focusedInstance = instances.find((i) => i.id === focusedId) ?? null
+
+  if (schema === null) return null
+
+  if (focusedInstance === null) {
+    return (
+      <div className="builder-form-panel">
+        <div className="builder-empty-state">
+          <BuilderEmptyIcon />
+          <p className="builder-empty-state__title">No instruction selected</p>
+          <p className="builder-empty-state__hint">
+            {instances.length === 0
+              ? "Add an instruction to start building your transaction."
+              : "Select an instruction from the list to edit it."}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="builder-form-panel">
+      <div className="builder-form-panel__header">
+        <div className="builder-form-panel__breadcrumb">
+          <span className="builder-form-panel__ix-num">
+            ix {(instances.findIndex((i) => i.id === focusedId) + 1)
+              .toString()
+              .padStart(2, "0")}
+          </span>
+          <h2 className="builder-form-panel__name">{focusedInstance.definition.name}</h2>
+        </div>
+        {focusedInstance.definition.docs.length > 0 && (
+          <p className="builder-form-panel__docs">
+            {focusedInstance.definition.docs[0]}
+          </p>
+        )}
+      </div>
+      <InstructionInstanceForm
+        instance={focusedInstance}
+        schema={schema}
+        walletAddress={null}
+      />
+    </div>
+  )
+}
+
+// ─── RIGHT SUMMARY PANEL WRAPPER ──────────────────────────────────────────────
+
+function SummaryPanel(): React.ReactNode {
+  return (
+    <div className="builder-right-panel">
+      <div className="builder-right-panel__header">
+        <span className="builder-right-panel__title">Summary</span>
+      </div>
+      <div className="builder-right-panel__body">
+        <TxSummaryPanel />
+      </div>
+    </div>
+  )
+}
+
+// ─── ROOT ─────────────────────────────────────────────────────────────────────
+
+export function TransactionBuilder(): React.ReactNode {
+  const { schema } = useAppStore()
+  const { addInstruction, clearAll } = useBuilderStore()
   const [showPicker, setShowPicker] = useState(false)
 
-  // Connected wallet — in a real app this would come from @solana/wallet-adapter
-  // For now, use null (wallet connection is a later concern)
-  const walletAddress: string | null = null
-
-  const handlePick = useCallback((def: InstructionDefinition): void => {
-    addInstruction(def)
-    setShowPicker(false)
-  }, [addInstruction])
-
-  const focusedInstance = instances.find((i) => i.id === focusedId) ?? null
+  const handlePick = useCallback(
+    (def: InstructionDefinition): void => {
+      addInstruction(def)
+      setShowPicker(false)
+    },
+    [addInstruction]
+  )
 
   if (schema === null) return null
 
   return (
     <div className="transaction-builder">
-      {/* ── Left sidebar ── */}
-      <div className="builder-sidebar">
-        <div className="builder-sidebar__header">
-          <span className="builder-sidebar__title">Transaction</span>
-          {instances.length > 0 && (
-            <button
-              className="builder-clear-btn"
-              onClick={clearAll}
-              type="button"
-              title="Clear all instructions"
-            >
-              Clear
-            </button>
-          )}
-        </div>
+      <InstructionListPanel
+        onAddInstruction={() => setShowPicker(true)}
+        onClearAll={clearAll}
+      />
 
-        <div className="builder-sidebar__list">
-          {instances.length === 0 && (
-            <div className="builder-sidebar__empty">
-              <span>No instructions yet</span>
-              <span className="builder-sidebar__empty-hint">
-                Add instructions to build your transaction
-              </span>
-            </div>
-          )}
-          {instances.map((inst, i) => (
-            <InstanceSidebarItem
-              key={inst.id}
-              label={inst.definition.name}
-              index={i}
-              isFocused={focusedId === inst.id}
-              isFirst={i === 0}
-              isLast={i === instances.length - 1}
-              accountCount={inst.definition.accounts.length}
-              argCount={inst.definition.args.length}
-              onClick={() => setFocused(inst.id)}
-              onRemove={() => removeInstruction(inst.id)}
-              onMoveUp={() => moveInstruction(inst.id, "up")}
-              onMoveDown={() => moveInstruction(inst.id, "down")}
-              onDuplicate={() => duplicateInstruction(inst.id)}
-            />
-          ))}
-        </div>
+      <FormPanel />
 
-        <button
-          className="builder-add-btn"
-          onClick={() => setShowPicker(true)}
-          type="button"
-        >
-          + Add Instruction
-        </button>
-      </div>
+      <SummaryPanel />
 
-      {/* ── Right form panel ── */}
-      <div className="builder-form-panel">
-        {focusedInstance !== null ? (
-          <>
-            <div className="builder-form-panel__header">
-              <div className="builder-form-panel__title-row">
-                <h2 className="builder-form-panel__name">
-                  {focusedInstance.definition.name}
-                </h2>
-                {focusedInstance.definition.docs.length > 0 && (
-                  <p className="builder-form-panel__docs">
-                    {focusedInstance.definition.docs[0]}
-                  </p>
-                )}
-              </div>
-            </div>
-            <InstructionInstanceForm
-              instance={focusedInstance}
-              schema={schema}
-              walletAddress={walletAddress}
-            />
-          </>
-        ) : (
-          <div className="builder-empty-state">
-            <BuilderEmptyIcon />
-            <p className="builder-empty-state__title">No instruction selected</p>
-            <p className="builder-empty-state__hint">
-              {instances.length === 0
-                ? "Add an instruction from the sidebar to start building your transaction."
-                : "Select an instruction from the list to edit it."}
-            </p>
-            {instances.length === 0 && (
-              <button
-                className="builder-empty-state__cta"
-                onClick={() => setShowPicker(true)}
-                type="button"
-              >
-                + Add First Instruction
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ── Instruction picker modal ── */}
       {showPicker && (
         <InstructionPicker
           definitions={schema.instructions}
@@ -289,10 +462,15 @@ export function TransactionBuilder(): React.ReactNode {
   )
 }
 
+// ─── ICON ─────────────────────────────────────────────────────────────────────
+
 function BuilderEmptyIcon(): React.ReactNode {
   return (
-    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" strokeWidth="1.2" strokeDasharray="4 2" />
+    <svg width="44" height="44" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect
+        x="3" y="3" width="18" height="18" rx="3"
+        stroke="currentColor" strokeWidth="1.2" strokeDasharray="4 2"
+      />
       <path d="M12 8v8M8 12h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   )
