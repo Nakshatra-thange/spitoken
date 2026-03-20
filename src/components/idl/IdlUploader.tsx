@@ -47,8 +47,8 @@ async function loadFromChain(address: string): Promise<void> {
 
   try {
     const connection = getConnection()
-    const result = await fetchIdlFromChain(connection, address)
-    const schema = await parseIdl(result.rawJson, result.programAddress)
+    const raw = await fetchIdlFromChain(address, connection)
+const schema = await parseIdl(raw)
     setSchema(schema)
   } catch (err) {
     setIdlStatus({ kind: "error", message: getErrorMessage(err) })

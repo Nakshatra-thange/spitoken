@@ -13,7 +13,7 @@
  * Retained from morning: CU panel, per-instruction breakdown, log viewer,
  * priority fee panel.
  */
-
+import { type ProgramSchema } from "../../types/idl"
 import React, { useState, useCallback, useMemo } from "react"
 import { useBuilderStore } from "../../store/builderStore"
 import { useAppStore } from "../../store/appStore"
@@ -23,7 +23,7 @@ import { simulateAndParse, type SimulationResult, type CpiFrame, type PriorityFe
 import { fetchAccountSnapshots, type SnapshotMap } from "../../lib/accountSnapshot"
 import { translateError, type TranslatedError } from "../../lib/errorTranslator"
 import { decodeAccountData, formatDecodedValue, type DecodedField } from "../../lib/borshDecoder"
-import { AccountDiffCard } from "./AccountDiffCard"
+
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -283,7 +283,7 @@ function FieldDiffTable({ entries }: { entries: FieldDiffEntry[] }): React.React
 
 // ─── ACCOUNT DIFF CARD ────────────────────────────────────────────────────────
 
-function AccountDiffCard({ diff, schema }: { diff: AccountDiff; schema: ReturnType<typeof useAppStore>["schema"] }): React.ReactNode {
+function AccountDiffCard({ diff, schema }: { diff: AccountDiff; schema: ProgramSchema | null }): React.ReactNode {
   const [expanded, setExpanded] = useState(diff.wasCreated || diff.wasClosed || diff.dataChanged)
 
   // Try to decode before and after data using the IDL

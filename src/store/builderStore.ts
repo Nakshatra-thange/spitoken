@@ -54,7 +54,7 @@ interface BuilderStore {
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
-function updateInstance(
+export function updateInstance(
   instances: InstructionInstance[],
   id: string,
   updater: (inst: InstructionInstance) => InstructionInstance

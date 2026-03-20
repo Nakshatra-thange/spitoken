@@ -420,7 +420,10 @@ export function formatDecodedValue(value: DecodedValue): string {
     case "float":     return value.value.toString()
     case "publicKey": return value.value
     case "string":    return `"${value.value}"`
-    case "bytes":     return `[${value.raw ? Array.from(value.raw).map(b => b.toString(16).padStart(2, "0")).join(" ") : ""}]`
+    case "bytes":
+  return `[${Array.from(value.value)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join(" ")}]`
     case "vec":       return `[${value.items.length} items]`
     case "array":     return `[${value.items.length} items]`
     case "option":    return value.inner === null ? "None" : `Some(${formatDecodedValue(value.inner.value)})`

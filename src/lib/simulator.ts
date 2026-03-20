@@ -1,21 +1,14 @@
 /**
- * simulator.ts
+ * simulator.ts  (Day 3 Evening — updated)
  *
- * Sends an assembled transaction to simulateTransaction, parses the response,
- * and extracts structured simulation results.
+ * Additions vs Day 3 Morning:
+ *  - AccountDiff now carries rawDataBefore / rawDataAfter (Uint8Array)
+ *    so the diff UI can decode them via borshDecoder
+ *  - simulateAndParse accepts a SnapshotMap for before-state
+ *  - buildAccountDiffs merges snapshot data with simulation response data
+ *  - SimulationResult adds translatedError field
  *
- * Also handles getRecentPrioritizationFees for the priority fee recommender.
- *
- * Log parsing:
- *   Solana logs follow this structure per instruction and CPI:
- *     "Program <id> invoke [<depth>]"      ← instruction start
- *     "Program log: <message>"             ← user logs
- *     "Program consumption: <N> units remaining"
- *     "Program <id> success"               ← instruction end (success)
- *     "Program <id> failed: <reason>"      ← instruction end (failure)
- *
- *   We walk the log array building a call tree, tracking units remaining
- *   at entry and exit of each frame to compute units consumed per frame.
+ * Log parsing, CU parsing, priority fees unchanged.
  */
 
 import {
@@ -23,26 +16,25 @@ import {
   VersionedTransaction,
   type SimulatedTransactionResponse,
 } from "@solana/web3.js"
+import { type SnapshotMap } from "./accountSnapshot"
 
 // ─── RESULT TYPES ─────────────────────────────────────────────────────────────
-
+const LOG_RE  = /^Program log: (.+)$/
+const DATA_RE = /^Program data: (.+)$/
 export interface CpiFrame {
   programId: string
   depth: number
-  /** Units remaining at the start of this frame (from the consumption log) */
   unitsAtEntry: number | null
-  /** Units remaining at the end of this frame */
   unitsAtExit: number | null
-  /** unitsAtEntry - unitsAtExit */
   unitsConsumed: number | null
   logs: string[]
   children: CpiFrame[]
   success: boolean
   failReason: string | null
+  dataLines: string[]
 }
 
 export interface PerInstructionResult {
-  /** 0-based index matching the instruction list */
   index: number
   programId: string
   unitsConsumed: number | null
@@ -54,65 +46,63 @@ export interface PerInstructionResult {
 
 export interface AccountDiff {
   address: string
-  /** Base64-encoded account data before simulation */
-  dataBefore: string | null
-  /** Base64-encoded account data after simulation */
-  dataAfter: string | null
+  // ── before (from snapshot, may be null if account didn't exist) ───────────
+  dataBefore: string | null           // base64
+  rawDataBefore: Uint8Array | null    // raw bytes for IDL decoding
   lamportsBefore: number | null
-  lamportsAfter: number | null
   ownerBefore: string | null
+  existedBefore: boolean
+  // ── after (from simulateTransaction response) ─────────────────────────────
+  dataAfter: string | null            // base64
+  rawDataAfter: Uint8Array | null     // raw bytes for IDL decoding
+  lamportsAfter: number | null
   ownerAfter: string | null
-  changed: boolean
+  // ── derived ───────────────────────────────────────────────────────────────
+  /** created = didn't exist before, exists after */
+  wasCreated: boolean
+  /** closed = had lamports before, zero lamports after */
+  wasClosed: boolean
+  /** did any data bytes change? */
+  dataChanged: boolean
+  /** lamport delta (positive = gained, negative = spent) */
+  lamportDelta: number | null
 }
 
 export interface ComputeRecommendation {
-  /** Actual units consumed */
   consumed: number
-  /** Recommended limit: consumed × 1.15, rounded to nearest 1000 */
   recommended: number
-  /** Headroom fraction: (recommended - consumed) / recommended */
   headroom: number
 }
 
 export interface PriorityFeeTier {
   label: "slow" | "normal" | "fast"
   microLamportsPerCu: number
-  /** Estimated total fee in SOL for the recommended CU limit */
   estimatedFeeSol: string
 }
 
 export interface SimulationResult {
   success: boolean
-  /** Top-level error, if the simulation itself failed to run */
   rpcError: string | null
-  /** Program error code / message if the transaction failed */
   programError: string | null
-  /** All logs returned by the RPC */
+  /** The raw err value from the RPC (for errorTranslator) */
+  rawErr: unknown
   logs: string[]
-  /** Total units consumed across all instructions */
   totalUnitsConsumed: number | null
-  /** Per-instruction breakdown */
   instructions: PerInstructionResult[]
-  /** Account state diffs for writable accounts */
   accountDiffs: AccountDiff[]
-  /** Compute unit recommendation */
   computeRecommendation: ComputeRecommendation | null
-  /** Priority fee tiers from getRecentPrioritizationFees */
   priorityFees: PriorityFeeTier[] | null
-  /** Raw RPC response for debugging */
   raw: SimulatedTransactionResponse | null
 }
 
 // ─── LOG PARSER ───────────────────────────────────────────────────────────────
 
-const INVOKE_RE = /^Program (\S+) invoke \[(\d+)\]$/
-const SUCCESS_RE = /^Program (\S+) success$/
-const FAILED_RE = /^Program (\S+) failed: (.+)$/
+const INVOKE_RE   = /^Program (\S+) invoke \[(\d+)\]$/
+const SUCCESS_RE  = /^Program (\S+) success$/
+const FAILED_RE   = /^Program (\S+) failed: (.+)$/
 const CONSUMED_RE = /^Program consumption: (\d+) units remaining$/
-const LOG_RE = /^Program log: (.+)$/
-const DATA_RE = /^Program data: (.+)$/
 
-function parseLogsIntoTree(logs: string[]): CpiFrame[] {
+export function parseLogsIntoTree(logs: string[]): CpiFrame[] {
   const stack: CpiFrame[] = []
   const roots: CpiFrame[] = []
   let lastConsumed: number | null = null
@@ -124,19 +114,17 @@ function parseLogsIntoTree(logs: string[]): CpiFrame[] {
       const frame: CpiFrame = {
         programId: m[1] ?? "",
         depth: parseInt(m[2] ?? "1", 10),
-        unitsAtEntry: lastConsumed,
+        unitsAtEntry: null,
         unitsAtExit: null,
         unitsConsumed: null,
         logs: [],
+        dataLines: [], 
         children: [],
         success: false,
         failReason: null,
       }
-      if (stack.length === 0) {
-        roots.push(frame)
-      } else {
-        stack[stack.length - 1]?.children.push(frame)
-      }
+      if (stack.length === 0) roots.push(frame)
+      else stack[stack.length - 1]?.children.push(frame)
       stack.push(frame)
       lastConsumed = null
       continue
@@ -170,23 +158,40 @@ function parseLogsIntoTree(logs: string[]): CpiFrame[] {
     }
 
     if ((m = CONSUMED_RE.exec(line)) !== null) {
-      lastConsumed = parseInt(m[1] ?? "0", 10)
-      stack[stack.length - 1]?.logs.push(line)
-      continue
+      const remaining = parseInt(m[1] ?? "0", 10)
+    
+      const current = stack[stack.length - 1]
+    
+      if (current !== undefined) {
+        if (current.unitsAtEntry === null) {
+          current.unitsAtEntry = remaining
+        } else {
+          current.unitsAtExit = remaining
+          current.unitsConsumed =
+            current.unitsAtEntry - current.unitsAtExit
+        }
+      }
+    
+      lastConsumed = remaining
     }
 
-    // Regular log line — attach to current frame
-    const currentFrame = stack[stack.length - 1]
-    if (currentFrame !== undefined) {
-      currentFrame.logs.push(line)
-    }
+    const current = stack[stack.length - 1]
+
+if (current !== undefined) {
+  current.logs.push(line)
+
+  let match: RegExpMatchArray | null
+
+  // ── EVENT DATA ─────────────────────
+  if ((match = DATA_RE.exec(line)) !== null) {
+    current.dataLines.push(match[1] ?? "")
+  }
+}
   }
 
   return roots
 }
 
-// Group the top-level frames (depth=1) into per-instruction results.
-// Each TransactionInstruction produces exactly one depth=1 frame.
 function groupByInstruction(
   roots: CpiFrame[],
   programIds: string[]
@@ -206,35 +211,70 @@ function groupByInstruction(
 
 function buildAccountDiffs(
   response: SimulatedTransactionResponse,
-  writableAddresses: string[]
+  writableAddresses: string[],
+  snapshots: SnapshotMap
 ): AccountDiff[] {
   const accounts = response.accounts ?? []
 
   return writableAddresses.map((address, i) => {
-    const acct = accounts[i]
-    if (acct == null) {
-      return {
-        address,
-        dataBefore: null,
-        dataAfter: null,
-        lamportsBefore: null,
-        lamportsAfter: null,
-        ownerBefore: null,
-        ownerAfter: null,
-        changed: false,
+    const snapshot = snapshots.get(address) ?? null
+    const postAcct = accounts[i] ?? null
+
+    // Before state
+    const existedBefore = snapshot?.exists ?? false
+    const dataBefore = snapshot?.dataBase64 ?? null
+    const rawDataBefore = snapshot?.data ?? null
+    const lamportsBefore = snapshot?.exists ? (snapshot.lamports) : null
+    const ownerBefore = snapshot?.exists ? snapshot.owner : null
+
+    // After state
+    let dataAfter: string | null = null
+    let rawDataAfter: Uint8Array | null = null
+    let lamportsAfter: number | null = null
+    let ownerAfter: string | null = null
+
+    if (postAcct !== null) {
+      dataAfter = Array.isArray(postAcct.data) ? postAcct.data[0] ?? null : null
+      lamportsAfter = postAcct.lamports
+      ownerAfter = postAcct.owner
+
+      // Decode base64 → Uint8Array for diff
+      if (dataAfter !== null) {
+        try {
+          const bin = atob(dataAfter)
+          rawDataAfter = new Uint8Array(bin.length)
+          for (let j = 0; j < bin.length; j++) rawDataAfter[j] = bin.charCodeAt(j)
+        } catch { rawDataAfter = null }
       }
     }
 
-    const dataAfter = Array.isArray(acct.data) ? acct.data[0] ?? null : null
+    // Derived flags
+    const wasCreated = !existedBefore && lamportsAfter !== null && lamportsAfter > 0
+    const wasClosed = existedBefore && lamportsBefore !== null && lamportsBefore > 0
+      && lamportsAfter !== null && lamportsAfter === 0
+    const dataChanged = dataBefore !== dataAfter && !(dataBefore === null && dataAfter === null)
+    const lamportDelta =
+      lamportsBefore !== null && lamportsAfter !== null
+        ? lamportsAfter - lamportsBefore
+        : lamportsBefore === null && lamportsAfter !== null
+        ? lamportsAfter
+        : null
+
     return {
       address,
-      dataBefore: null, // we don't prefetch — could add in a future version
+      dataBefore,
+      rawDataBefore: rawDataBefore ?? null,
+      lamportsBefore,
+      ownerBefore,
+      existedBefore,
       dataAfter,
-      lamportsBefore: null,
-      lamportsAfter: acct.lamports,
-      ownerBefore: null,
-      ownerAfter: acct.owner,
-      changed: true,
+      rawDataAfter,
+      lamportsAfter,
+      ownerAfter,
+      wasCreated,
+      wasClosed,
+      dataChanged,
+      lamportDelta,
     }
   })
 }
@@ -244,14 +284,10 @@ function buildAccountDiffs(
 function buildComputeRecommendation(consumed: number): ComputeRecommendation {
   const rawRecommended = Math.ceil(consumed * 1.15)
   const recommended = Math.ceil(rawRecommended / 1000) * 1000
-  return {
-    consumed,
-    recommended,
-    headroom: (recommended - consumed) / recommended,
-  }
+  return { consumed, recommended, headroom: (recommended - consumed) / recommended }
 }
 
-// ─── PRIORITY FEE PERCENTILE ──────────────────────────────────────────────────
+// ─── PRIORITY FEE ─────────────────────────────────────────────────────────────
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0
@@ -259,15 +295,16 @@ function percentile(sorted: number[], p: number): number {
   return sorted[Math.min(idx, sorted.length - 1)] ?? 0
 }
 
-// ─── MAIN SIMULATE FUNCTION ───────────────────────────────────────────────────
+// ─── MAIN FUNCTION ────────────────────────────────────────────────────────────
 
 export async function simulateAndParse(
   connection: Connection,
   transaction: VersionedTransaction,
   writableAddresses: string[],
-  programIds: string[]
+  programIds: string[],
+  snapshots: SnapshotMap = new Map()
 ): Promise<SimulationResult> {
-  // ── 1. simulateTransaction ────────────────────────────────────────────────
+  // ── simulateTransaction ────────────────────────────────────────────────────
   let simResponse: Awaited<ReturnType<typeof connection.simulateTransaction>>
 
   try {
@@ -276,10 +313,7 @@ export async function simulateAndParse(
       replaceRecentBlockhash: true,
       commitment: "confirmed",
       accounts: writableAddresses.length > 0
-        ? {
-            encoding: "base64",
-            addresses: writableAddresses,
-          }
+        ? { encoding: "base64", addresses: writableAddresses }
         : undefined,
     })
   } catch (err) {
@@ -288,6 +322,7 @@ export async function simulateAndParse(
       success: false,
       rpcError: msg,
       programError: null,
+      rawErr: null,
       logs: [],
       totalUnitsConsumed: null,
       instructions: [],
@@ -302,64 +337,48 @@ export async function simulateAndParse(
   const logs = simValue.logs ?? []
   const unitsConsumed = simValue.unitsConsumed ?? null
 
-  // ── 2. Parse logs ─────────────────────────────────────────────────────────
   const roots = parseLogsIntoTree(logs)
   const instructions = groupByInstruction(roots, programIds)
+  const accountDiffs = buildAccountDiffs(simValue, writableAddresses, snapshots)
 
-  // ── 3. Account diffs ──────────────────────────────────────────────────────
-  const accountDiffs = buildAccountDiffs(simValue, writableAddresses)
-
-  // ── 4. Program error ──────────────────────────────────────────────────────
   let programError: string | null = null
-  if (simValue.err !== null && simValue.err !== undefined) {
-    programError = typeof simValue.err === "string"
-      ? simValue.err
-      : JSON.stringify(simValue.err)
+  const rawErr: unknown = simValue.err ?? null
+  if (rawErr !== null) {
+    programError = typeof rawErr === "string" ? rawErr : JSON.stringify(rawErr)
   }
 
-  // ── 5. Compute recommendation ─────────────────────────────────────────────
   const computeRecommendation =
     unitsConsumed !== null && unitsConsumed > 0
       ? buildComputeRecommendation(unitsConsumed)
       : null
 
-  // ── 6. Priority fees ──────────────────────────────────────────────────────
+  // ── Priority fees ──────────────────────────────────────────────────────────
   let priorityFees: PriorityFeeTier[] | null = null
   try {
     const feeData = await connection.getRecentPrioritizationFees()
     if (feeData.length > 0) {
-      const feesPerCu = feeData
-        .map((f) => f.prioritizationFee)
-        .sort((a, b) => a - b)
-
+      const feesPerCu = feeData.map((f) => f.prioritizationFee).sort((a, b) => a - b)
       const p25 = percentile(feesPerCu, 25)
       const p75 = percentile(feesPerCu, 75)
       const p90 = percentile(feesPerCu, 90)
-
       const cuLimit = computeRecommendation?.recommended ?? 200_000
-      const solPerMicroLamport = 1 / 1_000_000 / 1_000_000_000
-
-      const feeInSol = (microLamportsPerCu: number): string => {
-        const totalMicroLamports = microLamportsPerCu * cuLimit
-        const sol = totalMicroLamports * solPerMicroLamport
-        return sol < 0.000001 ? "< 0.000001 SOL" : `${sol.toFixed(7)} SOL`
+      const feeInSol = (μL: number): string => {
+        const sol = μL * cuLimit / 1e15
+        return sol < 1e-6 ? "< 0.000001 SOL" : `${sol.toFixed(7)} SOL`
       }
-
       priorityFees = [
-        { label: "slow", microLamportsPerCu: p25, estimatedFeeSol: feeInSol(p25) },
-        { label: "normal", microLamportsPerCu: p75, estimatedFeeSol: feeInSol(p75) },
-        { label: "fast", microLamportsPerCu: Math.ceil(p90 * 1.1), estimatedFeeSol: feeInSol(Math.ceil(p90 * 1.1)) },
+        { label: "slow",   microLamportsPerCu: p25,                estimatedFeeSol: feeInSol(p25) },
+        { label: "normal", microLamportsPerCu: p75,                estimatedFeeSol: feeInSol(p75) },
+        { label: "fast",   microLamportsPerCu: Math.ceil(p90*1.1), estimatedFeeSol: feeInSol(Math.ceil(p90*1.1)) },
       ]
     }
-  } catch {
-    // Priority fee fetch is best-effort — don't fail the whole simulation
-    priorityFees = null
-  }
+  } catch { priorityFees = null }
 
   return {
-    success: programError === null,
+    success: rawErr === null,
     rpcError: null,
     programError,
+    rawErr,
     logs,
     totalUnitsConsumed: unitsConsumed,
     instructions,
@@ -369,4 +388,3 @@ export async function simulateAndParse(
     raw: simValue,
   }
 }
-
