@@ -628,6 +628,23 @@ a      { color: inherit; text-decoration: none; }
   border: 1px solid var(--green-dim);
 }
 
+.workspace {
+  display: grid;
+  grid-template-columns: 280px 1fr 420px;
+  height: 100%;
+}
+
+@media (max-width: 1000px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .tab-bar {
+    display: flex;
+    overflow-x: auto;
+  }
+}
+
 /* ─── SCROLLBAR ──────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

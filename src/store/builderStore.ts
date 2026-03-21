@@ -25,7 +25,8 @@ interface BuilderStore {
   focusedId: string | null
 
   // ── Instance lifecycle ────────────────────────────────────────────────────
-  addInstruction: (definition: InstructionDefinition) => string  // returns new id
+  addInstruction: (definition: InstructionDefinition) => string 
+  setInstructions: (instructions: InstructionInstance[]) => void
   removeInstruction: (id: string) => void
   moveInstruction: (id: string, direction: "up" | "down") => void
   duplicateInstruction: (id: string) => void
@@ -77,6 +78,9 @@ export const useBuilderStore = create<BuilderStore>()((set, get) => ({
     return instance.id
   },
 
+  setInstructions: (instructions) => {
+    set({ instances: instructions, focusedId: instructions[instructions.length - 1]?.id ?? null })
+  },
   removeInstruction: (id) => {
     set((state) => {
       const instances = state.instances.filter((i) => i.id !== id)

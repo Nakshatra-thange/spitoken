@@ -7,6 +7,7 @@ import { type AssembledTransaction } from "../../lib/txAssembler"
 import { fetchFinalTransaction } from "../../lib/postExecution"
 import { analyzeFailure } from "../../lib/failureParser"
 import { ReviewModal } from "./ReviewModal"
+import { saveHistory } from "../../lib/history"
 export function ExecutePanel({
   assembled,
 }: {
@@ -19,8 +20,7 @@ export function ExecutePanel({
   const [signature, setSignature] = useState<string | null>(null)
   const [retryCount, setRetryCount] = useState(0)
   const [showReview, setShowReview] = useState(false)
-  const now = Date.now()
-  setExpiry(now + 60000) // ~60s validity
+
   useEffect(() => {
     if (!expiry) return
   
@@ -38,6 +38,8 @@ export function ExecutePanel({
     if (!assembled || !publicKey || !signTransaction) return
   
     const connection = getConnection()
+    const now = Date.now()
+    setExpiry(now + 60000) // ~60s validity
   
     try {
       setStatus("signing")
@@ -68,8 +70,24 @@ export function ExecutePanel({
       })
   
       setStatus("done")
+      saveHistory({
+        signature: sig,
+        timestamp: Date.now(),
+        success: true,
+        computeUnits: null, // you can improve later
+        instructions: assembled.instructions.map(i => i.name),
+      })
     } catch (err) {
       setStatus("error")
+      if (signature) {
+        saveHistory({
+          signature,
+          timestamp: Date.now(),
+          success: false,
+          computeUnits: null,
+          instructions: assembled?.instructions.map(i => i.name) ?? [],
+        })
+      }
       console.error(err)
     }
   }
@@ -85,17 +103,19 @@ export function ExecutePanel({
     Expires in: {Math.max(0, Math.floor((expiry - Date.now()) / 1000))}s
   </div>
 )}
-<ReviewModal
-  open={showReview}
-  onClose={() => setShowReview(false)}
-  onConfirm={async () => {
-    setShowReview(false)
-    await handleExecute()
-  }}
-  assembled={assembled!}
-  computeUnits={200000}
-  priorityFee={0}
-/>
+{assembled && (
+  <ReviewModal
+    open={showReview}
+    onClose={() => setShowReview(false)}
+    onConfirm={async () => {
+      setShowReview(false)
+      await handleExecute()
+    }}
+    assembled={assembled}
+    computeUnits={200000}
+    priorityFee={0}
+  />
+)}
 
       <div>Status: {status}</div>
       {status === "confirming" && (

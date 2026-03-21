@@ -13,6 +13,8 @@
  * Retained from morning: CU panel, per-instruction breakdown, log viewer,
  * priority fee panel.
  */
+
+//<ExecutePanel assembled={assembled} />
 import { type ProgramSchema } from "../../types/idl"
 import React, { useState, useCallback, useMemo } from "react"
 import { useBuilderStore } from "../../store/builderStore"
@@ -789,6 +791,7 @@ export function SimulationPanel(): React.ReactNode {
 
 function SimSpinner(): React.ReactNode {
   return (
+    
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="spinner" aria-hidden="true">
       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5"
         strokeLinecap="round" strokeDasharray="31.416" strokeDashoffset="10" />

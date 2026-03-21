@@ -29,8 +29,8 @@ import {
     VersionedTransaction,
     type AccountMeta,
   } from "@solana/web3.js"
-  
   import { type InstructionInstance } from "../types/builder"
+
   import { type ProgramSchema } from "../types/idl"
   import { serializeInstructionData, BorshSerializeError } from "./borshSerializer"
   import { getResolvedAddress } from "./txValidator"
@@ -47,15 +47,21 @@ import {
   // ─── RESULT ───────────────────────────────────────────────────────────────────
   
   export interface AssembledTransaction {
-    /** The ready-to-simulate versioned transaction */
     transaction: VersionedTransaction
-    /** One entry per instruction — which account addresses were used */
     instructionAccounts: { name: string; address: string }[][]
-    /** The deduplicated, ordered flat account list */
     flatAccounts: { address: string; isMut: boolean; isSigner: boolean }[]
-    /** The recentBlockhash used */
     recentBlockhash: string
-    /** Serialized instruction data (one Uint8Array per instruction) */
+    instructions: {
+      name : string,
+      programId: string
+      keys: {
+        pubkey: string
+        isSigner: boolean
+        isWritable: boolean
+      }[]
+      data: string // base64 or hex
+    }[]
+  
     instructionData: Uint8Array[]
   }
   
@@ -115,7 +121,7 @@ import {
     // ── 3. Collect per-instruction account metas ──────────────────────────────
     const instructionAccountMetas: AccountMeta[][] = []
     const instructionAccounts: { name: string; address: string }[][] = []
-  
+    
     // Global dedup map: address → { isMut, isSigner } — union of all ix usages
     const globalAccountMap = new Map<
       string,
@@ -181,6 +187,17 @@ import {
         data: Buffer.from(data),
       })
     })
+
+    const instructionsMeta = instances.map((inst, i) => ({
+      name: inst.definition.name, // ✅ ADD THIS
+      programId: programPubkey.toBase58(),
+      keys: (instructionAccountMetas[i] ?? []).map((k) => ({
+        pubkey: k.pubkey.toBase58(),
+        isSigner: k.isSigner,
+        isWritable: k.isWritable,
+      })),
+      data: Buffer.from(instructionData[i] ?? []).toString("base64"),
+    }))
   
     // ── 6. Fetch recent blockhash ─────────────────────────────────────────────
     let recentBlockhash: string
@@ -230,5 +247,6 @@ import {
       flatAccounts,
       recentBlockhash,
       instructionData,
+      instructions : instructionsMeta,
     }
   }

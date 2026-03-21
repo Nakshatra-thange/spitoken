@@ -3,25 +3,31 @@ import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react
 import {
     PhantomWalletAdapter,
     SolflareWalletAdapter,
-    
 } from "@solana/wallet-adapter-wallets";
+import { WalletModalProvider, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 
-import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
-
-require("@solana/wallet-adapter-react-ui/styles.css");
+// ✅ Fix CSS import - remove the parentheses
+import "@solana/wallet-adapter-react-ui/styles.css";
 
 interface Props {
   children: ReactNode;
 }
 
 export const SolanaWalletProvider: FC<Props> = ({ children }) => {
-  const endpoint = import.meta.env.VITE_HELIUS_RPC as string;
+  const endpoint = import.meta.env.VITE_RPC_URL as string;
+  
+  // ✅ Add validation
+  if (!endpoint) {
+    console.error("RPC endpoint is not defined!");
+    return <div>Error: RPC URL not configured. Check your .env file.</div>;
+  }
+
+  console.log("RPC Endpoint:", endpoint);
 
   const wallets = useMemo(
     () => [
       new PhantomWalletAdapter(),
       new SolflareWalletAdapter(),
-      
     ],
     []
   );

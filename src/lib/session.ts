@@ -1,5 +1,5 @@
 //import { type ProgramSchema } from "../types/idl"
-import { type InstructionInstance } from "../store/builderStore"
+import { type InstructionInstance } from "../types/builder"
 
 export interface Session {
   idl: unknown
@@ -10,10 +10,14 @@ export interface Session {
 export function serializeSession(session: Session): string {
   return JSON.stringify(session, null, 2)
 }
-
 export function deserializeSession(json: string): Session {
-  return JSON.parse(json) as Session
-}
+    const parsed = JSON.parse(json)
+    if (!parsed.instructions || !parsed.timestamp) {
+      throw new Error("Invalid session file")
+    }
+    return parsed as Session
+  }
+
 
 export async function loadSessionFile(file: File): Promise<Session> {
     const text = await file.text()
