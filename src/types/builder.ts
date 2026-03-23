@@ -13,7 +13,7 @@ import { type InstructionDefinition, type FieldType } from "./idl"
 // instead of type descriptions. Every node can be valid or invalid.
 
 export type ArgValue =
-  | { kind: "primitive"; raw: string }          // raw string from input, validated on use
+  | { kind: "primitive"; raw?: string; value?: number | bigint } // raw input + optional parsed value
   | { kind: "bool"; value: boolean }
   | { kind: "vec"; items: ArgValue[] }
   | { kind: "array"; items: ArgValue[] }

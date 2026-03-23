@@ -103,7 +103,7 @@ function PrimitiveInput({
 
   // PublicKey → text with base58 validation
   if (type === "publicKey") {
-    const raw = value.kind === "primitive" ? value.raw : ""
+    const raw = value.kind === "primitive" ? (value.raw ?? "") : ""
     let addrValid = false
     if (raw.trim() !== "") {
       try { new PublicKey(raw.trim()); addrValid = true } catch { /* invalid */ }
@@ -123,7 +123,27 @@ function PrimitiveInput({
             type="text"
             placeholder="base58 address…"
             value={raw}
-            onChange={(e) => onChange({ kind: "primitive", raw: e.target.value })}
+            onChange={(e) => {
+              const raw = e.target.value
+            
+              // Handle empty
+              if (raw === "") {
+                onChange({ kind: "primitive", raw: "" })
+                return
+              }
+          
+              if (isNumericType(type)) {
+                const num = Number(raw)
+            
+                if (!Number.isNaN(num)) {
+                  onChange({ kind: "primitive", raw, value: num })
+                  return
+                }
+              }
+            
+              // fallback (string / bytes etc.)
+              onChange({ kind: "primitive", raw })
+            }}
             disabled={disabled}
             spellCheck={false}
             aria-invalid={raw !== "" && !addrValid}
@@ -137,11 +157,11 @@ function PrimitiveInput({
   }
 
   // Everything else → text input
-  const raw = value.kind === "primitive" ? value.raw : ""
+  const raw = value.kind === "primitive" ? (value.raw ?? "") : ""
   const placeholder = getPlaceholder(type)
 
   const validation = raw !== ""
-    ? validateArgValue({ kind: "primitive", raw }, { kind: "primitive", type }, new Map())
+    ? validateArgValue(value, { kind: "primitive", type }, new Map())
     : { valid: true, errorMessage: null }
 
   return (
@@ -158,7 +178,35 @@ function PrimitiveInput({
           type="text"
           placeholder={placeholder}
           value={raw}
-          onChange={(e) => onChange({ kind: "primitive", raw: e.target.value })}
+          onChange={(e) => {
+            const raw = e.target.value
+
+            // Empty input
+            if (raw === "") {
+              onChange({ kind: "primitive", raw: "" })
+              return
+            }
+
+            // numeric types → convert
+            if (isNumericType(type)) {
+              const num = Number(raw)
+
+              if (!Number.isNaN(num)) {
+                onChange({
+                  kind: "primitive",
+                  raw,
+                  value: num,
+                })
+                return
+              }
+            }
+
+            // fallback (string / bytes)
+            onChange({
+              kind: "primitive",
+              raw,
+            })
+          }}
           disabled={disabled}
           spellCheck={false}
           inputMode={isNumericType(type) ? "numeric" : "text"}
@@ -609,7 +657,7 @@ export function ArgInput({
       const typeDef = typeRegistry.get(type.name)
       if (typeDef === undefined) {
         // Unknown type — show raw JSON input as fallback
-        const raw = value.kind === "primitive" ? value.raw : ""
+        const raw = value.kind === "primitive" ? (value.raw ?? "") : ""
         return (
           <div className="arg-field">
             {label !== undefined && (

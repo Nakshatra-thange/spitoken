@@ -302,6 +302,14 @@ function serializePrimitive(
   type: import("../types/idl").PrimitiveKind,
   path: string
 ): void {
+  const primitiveString =
+    value.kind === "primitive"
+      ? (value.raw ??
+        (value.value !== undefined
+          ? (typeof value.value === "bigint" ? value.value.toString() : String(value.value))
+          : ""))
+      : ""
+
   if (type === "bool") {
     const v = value.kind === "bool" ? value.value : value.kind === "primitive" && value.raw === "true"
     writer.writeU8(v ? 1 : 0)
@@ -309,19 +317,17 @@ function serializePrimitive(
   }
 
   if (type === "publicKey") {
-    const raw = value.kind === "primitive" ? value.raw : ""
-    writer.writePublicKey(raw)
+    writer.writePublicKey(primitiveString)
     return
   }
 
   if (type === "string") {
-    const raw = value.kind === "primitive" ? value.raw : ""
-    writer.writeString(raw)
+    writer.writeString(primitiveString)
     return
   }
 
   if (type === "bytes") {
-    const raw = (value.kind === "primitive" ? value.raw : "").replace(/\s/g, "").replace(/^0x/i, "")
+    const raw = primitiveString.replace(/\s/g, "").replace(/^0x/i, "")
     const bytes = new Uint8Array(raw.length / 2)
     for (let i = 0; i < bytes.length; i++) {
       bytes[i] = parseInt(raw.slice(i * 2, i * 2 + 2), 16)
@@ -330,7 +336,7 @@ function serializePrimitive(
     return
   }
 
-  const raw = value.kind === "primitive" ? value.raw.trim() : ""
+  const raw = primitiveString.trim()
   if (raw === "") throw new BorshSerializeError("Empty value", path)
 
   switch (type) {

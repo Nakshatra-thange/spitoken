@@ -114,7 +114,12 @@ export function validateArgValue(
       if (value.kind !== "primitive") {
         return { valid: false, errorMessage: "Type mismatch" }
       }
-      return validatePrimitive(value.raw, type.type)
+      const raw =
+        value.raw ??
+        (value.value !== undefined
+          ? (typeof value.value === "bigint" ? value.value.toString() : String(value.value))
+          : "")
+      return validatePrimitive(raw, type.type)
     }
 
     case "vec": {
