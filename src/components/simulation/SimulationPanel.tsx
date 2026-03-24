@@ -17,6 +17,7 @@
 //<ExecutePanel assembled={assembled} />
 import { type ProgramSchema } from "../../types/idl"
 import React, { useState, useCallback, useMemo } from "react"
+import { useWallet } from "@solana/wallet-adapter-react"
 import { useBuilderStore } from "../../store/builderStore"
 import { useAppStore } from "../../store/appStore"
 import { getConnection } from "../../lib/connection"
@@ -677,19 +678,29 @@ function PriorityFeePanel({ fees, recommendedCu }: { fees: PriorityFeeTier[]; re
 export function SimulationPanel(): React.ReactNode {
   const { instances } = useBuilderStore()
   const { schema } = useAppStore()
+  const { publicKey } = useWallet()
   const [status, setStatus] = useState<SimStatus>({ phase: "idle" })
 
   const canSimulate = instances.length > 0 && schema !== null
 
   const handleSimulate = useCallback(async () => {
     if (schema === null) return
+    if (!publicKey) {
+      alert("Connect wallet first")
+      return
+    }
     const conn = getConnection()
 
     // ── Step 1: Assemble ──────────────────────────────────────────────────────
     setStatus({ phase: "assembling" })
     let asm: AssembledTransaction
     try {
-      asm = await assembleTransaction(instances, schema, conn, null)
+      asm = await assembleTransaction(
+        instances,
+        schema,
+        conn,
+        publicKey?.toBase58() ?? null
+      )
     } catch (err) {
       const msg = err instanceof TxAssemblyError ? err.message : err instanceof Error ? err.message : String(err)
       setStatus({ phase: "error", message: `Assembly failed: ${msg}` })
@@ -709,7 +720,7 @@ export function SimulationPanel(): React.ReactNode {
     const programIds = instances.map(() => schema.address ?? "")
     const result = await simulateAndParse(conn, asm.transaction, writableAddresses, programIds, snapshots)
     setStatus({ phase: "done", result })
-  }, [instances, schema])
+  }, [instances, schema, publicKey])
 
   // Build translated error if result failed
   const translatedError = useMemo((): TranslatedError | null => {

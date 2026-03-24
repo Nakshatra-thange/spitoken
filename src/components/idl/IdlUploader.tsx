@@ -31,7 +31,9 @@ async function loadFromFile(file: File): Promise<void> {
   try {
     const text = await file.text()
     const raw = parseIdlJson(text)
-    const schema = await parseIdl(raw)
+    const programAddress = prompt("Enter program address for this IDL")
+    const schema = await parseIdl(raw, programAddress ?? undefined)
+    
     setSchema(schema)
   } catch (err) {
     setIdlStatus({ kind: "error", message: getErrorMessage(err) })

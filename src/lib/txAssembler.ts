@@ -34,6 +34,7 @@ import {
   import { type ProgramSchema } from "../types/idl"
   import { serializeInstructionData, BorshSerializeError } from "./borshSerializer"
   import { getResolvedAddress } from "./txValidator"
+
   
   // ─── ERRORS ───────────────────────────────────────────────────────────────────
   
@@ -74,6 +75,7 @@ import {
     /** Payer address — required for TransactionMessage. If null, use a placeholder. */
     payerAddress: string | null
   ): Promise<AssembledTransaction> {
+  console.log("PAYER:", payerAddress)
     if (instances.length === 0) {
       throw new TxAssemblyError("No instructions to assemble")
     }
@@ -169,16 +171,22 @@ import {
   
     // ── 4. Get program ID for each instruction ────────────────────────────────
     // All instructions target the loaded program; we need its address.
-    const programAddress = schema.address
+    const programAddress = prompt("Enter program address for this IDL")
     if (programAddress === null) {
       throw new TxAssemblyError("Program address unknown — cannot assemble transaction")
     }
+    const FALLBACK_PROGRAM = "11111111111111111111111111111111"
+
     let programPubkey: PublicKey
-    try { programPubkey = new PublicKey(programAddress) }
-    catch { throw new TxAssemblyError(`Invalid program address: ${programAddress}`) }
+    try {
+      programPubkey = new PublicKey(programAddress ?? FALLBACK_PROGRAM)
+    } catch {
+      programPubkey = new PublicKey(FALLBACK_PROGRAM)
+    }
+
   
     // ── 5. Build TransactionInstruction objects ────────────────────────────────
-    const txInstructions: TransactionInstruction[] = instances.map((inst, i) => {
+    const txInstructions: TransactionInstruction[] = instances.map((_inst, i) => {
       const data = instructionData[i] ?? new Uint8Array(8)
       const keys = instructionAccountMetas[i] ?? []
       return new TransactionInstruction({
